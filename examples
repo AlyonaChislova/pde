@@ -1,0 +1,149 @@
+# Метод китайцев, extended runge kutta
+# y'' + omega*y = -cos(t), y(0) = 1, y'(0) = 0
+
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.integrate import quad
+
+def phi0(x):
+    if x == 0:
+        return 1
+    return np.cos(np.sqrt(x))
+
+def phi1(x):
+    if x == 0:
+        return 1
+    return np.sin(np.sqrt(x)) / np.sqrt(x)
+
+def g(t):
+    return -np.cos(t)
+
+def I1(h, tn, omega, g):
+    integral, _ = quad(lambda z: (h - z) * phi1((h - z)**2 * omega) * g(tn + z), 0, h)
+    return integral / h
+
+def I2(h, tn, omega, g):
+    integral, _ = quad(lambda z: phi0((h - z)**2 * omega) * g(tn + z), 0, h)
+    return integral
+
+def erkn_method(omega, y0, dy0, t_max, h):
+    t = np.arange(0, t_max + h, h)
+    n_steps = len(t)
+  
+    y = np.zeros(n_steps)
+    dy = np.zeros(n_steps)
+    
+    y[0] = y0
+    dy[0] = dy0
+    
+    for i in range(1, n_steps):
+        tn = t[i-1]
+        V = (h**2) * omega
+        
+        y[i] = phi0(V) * y[i-1] + h * phi1(V) * dy[i-1] + I1(h, tn, omega, g)
+        dy[i] = -h * omega * phi1(V) * y[i-1] + phi0(V) * dy[i-1] + I2(h, tn, omega, g)
+    
+    return t, y, dy
+
+def analytical_solution(t, omega):
+    return np.cos(np.sqrt(omega) * t) + (np.cos(t) - np.cos(np.sqrt(omega) * t)) / (1 - omega)
+
+y0 = 1.0   
+dy0 = 0.0  
+t_max = 1000  
+h = 1  
+
+omegas = [1.1, 10, 10**2, 10**3, 10**4, 10**5, 10**6, 10**7, 10**8, 10**10, 10**11, 10**15, 10**17]
+
+for omega in omegas:
+  print("omega", omega)
+  t_erkn, y_erkn, dy_erkn = erkn_method(omega, y0, dy0, t_max, h)
+  exact_solution = analytical_solution(t_erkn, omega)
+  
+  plt.plot(t_erkn, y_erkn, label='Numerical Solution')
+
+  plt.plot(t_erkn, exact_solution, label='Exact Solution', linestyle='--')
+  plt.show()
+
+  error = np.abs(y_erkn - exact_solution)
+  max_error = np.max(np.abs(error))
+  print("max error", max_error)
+  min_error = np.min(np.abs(error))
+  print("min error", min_error)
+  plt.plot(t_erkn, error, label='Error', color='orange')
+  plt.yscale('log') 
+  plt.legend()
+  plt.show()
+
+# Filon
+# y'' + omega*y = -cos(t) y(0) = 1, y'(0) = 0
+
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.integrate import quad
+
+def phi_0(h, omega):
+    return np.cos(h * np.sqrt(omega))
+
+def phi_1(h, omega):
+    epsilon = 1e-30
+    return (1 / (h * np.sqrt(omega) + epsilon)) * np.sin(h * np.sqrt(omega))
+
+def g(t):
+    return -np.cos(t)
+
+def I1(h, tn, omega, g_derivative):
+    integral, _ = quad(lambda z: (h - z) * phi_1(h - z, omega) * g_derivative(tn + z), 0, h)
+    return integral
+
+def I2(h, tn, omega, g_derivative):
+    integral, _ = quad(lambda z: phi_0(h - z, omega) * g_derivative(tn + z), 0, h)
+    return integral
+
+def Filon_method(omega_inp):
+  q0 = 1  
+  q_prime_0 = 0  
+  omega = omega_inp  
+  h = 1  
+  t_end = 1000  
+  tn = 0
+  qn = q0
+  qn_prime = q_prime_0
+  t_values = [tn]
+  q_values = [qn]
+
+  while tn < t_end:
+    g_derivative = np.sin
+
+    qn_next = phi_0(h, omega) * qn + h * phi_1(h, omega) * qn_prime + I1(h, tn, omega, g_derivative)
+    qn_prime_next = -h * omega * phi_1(h, omega) * qn + phi_0(h, omega) * qn_prime + I2(h, tn, omega, g_derivative)
+
+    tn += h
+    qn = qn_next
+    qn_prime = qn_prime_next
+
+    t_values.append(tn)
+    q_values.append(qn)
+
+  return t_values, q_values
+
+omegas = [1.1, 10, 10**2, 10**3, 10**4, 10**5, 10**6, 10**7, 10**8, 10**10, 10**11, 10**15, 10**17]
+
+for omega in omegas:
+  print("omega", omega)
+  t_values, q_values = Filon_method(omega)
+  plt.plot(t_values, q_values, label='Numerical Solution')
+  t_array = np.array(t_values)
+  exact_solution = np.cos(np.sqrt(omega) * t_array) + (np.cos(t_array) - np.cos(np.sqrt(omega) * t_array)) / (1 - omega)
+  plt.plot(t_array, exact_solution, label='Exact Solution', linestyle='--')
+  plt.show()
+
+  error = np.abs(q_values - exact_solution)
+  max_error = np.max(np.abs(error))
+  print("max error", max_error)
+  min_error = np.min(np.abs(error))
+  print("min error", min_error)
+  plt.plot(t_values, error, label='Error', color='orange')
+  plt.yscale('log') 
+  plt.legend()
+  plt.show()

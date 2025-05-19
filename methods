@@ -1,0 +1,392 @@
+import numpy as np
+from numpy.linalg import det, inv, svd, norm
+
+
+def neyavnie_trap(time_steps, y0, system, params):
+    N = len(y0)
+    T = len(time_steps)
+    y_ = np.zeros((T-1) * N)
+    dts = np.diff(time_steps)
+    
+    def eq(y_):
+        y = np.concatenate((y0,y_))
+        y = y.reshape(T, N)
+        I = np.array([( system(time_steps[i], y[i], params) +
+                       system(time_steps[i+1], y[i+1], params) ) / 2 * dts[i] for i in range(T-1)])
+        
+        return np.ravel(y[1:] - y[:-1] - I)
+    aux = root(eq, y_)
+#     print(aux)
+    sol = np.concatenate((y0,aux.x)).reshape(T,N)
+    return sol
+
+
+#simpson rule for integration 1D
+def integrate(F, grid):
+    I = 0
+    for i in range(len(grid)-1):
+        I += ( F(grid[i]) + F(grid[i+1]) + 4 * F((grid[i+1]+grid[i])/2) ) * ( grid[i+1]-grid[i] ) / 6
+    return I
+
+#simpson rule for integration 2D
+def integrate_2d(F, xgrid, ygrid):
+    I = 0
+    for i in range(len(xgrid)-1):
+        for j in range(len(ygrid)-1):
+            x0 = xgrid[i]
+            x2 = xgrid[i+1]
+            x1 = (x2+x0)/2
+            hx = x1-x0
+            
+            y0 = ygrid[j]
+            y2 = ygrid[j+1]
+            y1 = (y2+y0)/2
+            hy = y1-y0
+            
+            F00 = F(x0,y0)
+            F22 = F(x2,y2)
+            F02 = F(x0,y2)
+            F20 = F(x2,y0)
+            
+            F01 = F(x0,y1)
+            F10 = F(x1,y0)
+            F12 = F(x1,y2)
+            F21 = F(x2,y1)
+            
+            F11 = F(x1,y1)
+            
+            I += (hx*hy)/9 * ( (F00+F22+F02+F20) + 4*(F01+F10+F12+F21) + 16*F11 )
+            
+    return I
+
+
+def integrate_rk6(F, grid):
+    I = 0
+    for t in range(len(grid) - 1):
+
+        dx = grid[t + 1] - grid[t]
+        x0 = grid[t]
+        x1 = grid[t + 1]
+
+        k_1 = F(x0)
+        k_2 = F(x0 + dx / 3)
+        k_3 = F(x0 + 2 / 3 * dx)
+        k_4 = F(x0 + dx / 3)
+        k_5 = F(x0 + 5 / 6 * dx)
+        k_6 = F(x0 + dx / 6)
+        k_7 = F(x1)
+
+        I += (13/200 * k_1 + 11/40 * k_3 + 11/40 * k_4 + 4/25 * k_5 + 4/25 * k_6 + 13/200 * k_7) * dx
+        
+    return I
+
+def euler(time_steps, y0, system, params):
+    ys = [y0]
+    for t in range(len(time_steps)-1):
+        dt = time_steps[t+1]-time_steps[t]
+        t0 = time_steps[t]
+        y0 = y0 + dt * system(t0, y0, params)
+        ys.append(y0)
+    return np.array(ys)
+
+def runge_kutta(time_steps, y0, system, params):
+    ys = [y0]
+    for t in range(len(time_steps)-1):
+        dt = time_steps[t+1]-time_steps[t]
+        t0 = time_steps[t]
+        t1 = time_steps[t+1]
+        k1 = system(t0, y0, params)
+        k2 = system(t0 + dt/2, y0 + dt / 2 * k1, params)
+        k3 = system(t0 + dt/2, y0 + dt / 2 * k2, params)
+        k4 = system(t1, y0 + dt * k3, params)
+        y0  = y0 + dt / 6 * (k1 + 2 * k2 + 2 * k3 + k4)
+        ys.append(y0)
+    return np.array(ys)
+
+def shooting(ts, y_init, system, bc, params, solver=euler, eps=10**(-4), t0=None, verbose=False):
+    if t0 is None:
+        t0 = len(ts)//2
+    
+    ts_left = ts[t0::-1]
+    ts_right = ts[t0:]
+
+    if 'max_newton_steps' in params:
+        max_newton_steps = params['max_newton_steps']
+    else:
+        max_newton_steps = 20
+    
+    if 'l_p' not in params:
+        params['l_p'] = -1
+
+    newton_steps = 0
+    F = np.zeros(len(y_init)*len(y_init)).reshape(len(y_init), len(y_init))
+
+    while True:       
+        ys = np.concatenate((solver(ts_left, y_init, system, params)[::-1],
+                             solver(ts_right, y_init, system, params)[1:]))
+        
+        rs = bc(ys, params)
+        if verbose:
+            print(rs)
+        if (np.abs(rs) < eps).all():
+            CONVERGED = True
+            break
+            
+        if newton_steps > max_newton_steps:
+            print(rs)
+            CONVERGED = False
+            break
+        
+        F = np.zeros(len(y_init)*len(y_init)).reshape(len(y_init), len(y_init))
+        for i in range(len(y_init)):
+            if i == params['l_p']:
+                params['p'] += eps
+            else:
+                y_init[i] += eps
+            
+            yis = np.concatenate((solver(ts_left, y_init, system, params)[::-1],
+                                  solver(ts_right, y_init, system, params)[1:]))
+            rsi = bc(yis, params)
+            
+            if i == params['l_p']:
+                params['p'] -= eps
+                columni = (rsi - rs) / eps
+            else:
+                y_init[i] -= eps
+                columni = (rsi - rs) / eps
+            
+                
+            F[:, i] = columni
+        newton_steps += 1
+        if params['l_p'] != -1:
+            aux = y_init[params['l_p']]
+            y_init[params['l_p']] = params['p']
+        F = F + np.eye(2)*10**(-20)
+        y_init = y_init - np.dot(inv(F), rs)
+        if params['l_p'] != -1:
+            params['p'] = y_init[params['l_p']]
+            y_init[params['l_p']] = aux
+
+        
+    return CONVERGED, newton_steps, ys, F
+
+
+def augmented_frechet_matrix(time_steps, ys_sol, system, params, cur_p, bc, bc_params, solver=runge_kutta):
+    eps = 10**(-4)
+    t_left = time_steps[len(time_steps)//2::-1]
+    t_right = time_steps[len(time_steps)//2:]
+    y_init = ys_sol[t_left[0]]
+    ys = np.concatenate((solver(t_left, y_init, system, params)[::-1],
+                         solver(t_right, y_init, system, params)[1:]))
+    rs = bc(ys, bc_params)
+    aug_F = np.zeros(len(y_init)*len(y_init) + len(y_init)).reshape(len(y_init), len(y_init)+1)
+    for i in range(len(y_init)):
+        yi_init = y_init.copy()
+        yi_init[i] += eps
+
+        yis = np.concatenate((solver(t_left, yi_init, system, params)[::-1],
+               solver(t_right, yi_init, system, params)[1:]))
+        rsi = bc(yis, bc_params)
+
+        columni = (rsi - rs) / eps
+        aug_F[:, i] = columni
+    params[cur_p] += eps
+    yps = np.concatenate((solver(t_left, y_init, system, params)[::-1],
+               solver(t_right, y_init, system, params)[1:]))
+    params[cur_p] -= eps
+    rsp = bc(yps, bc_params)
+    columnp = (rsp - rs) / eps
+    aug_F[:, -1] = columnp
+    return aug_F
+
+def analyse_point(aug_F):
+    eps = 10**(-4)
+    dets = []
+    for col in range(len(aug_F[0])):
+        cols = [i for i in range(len(aug_F[0])) if i != col]
+        dets.append(det(aug_F[:, cols]))
+    if (np.abs(dets) < eps).all():
+        return True, np.round(dets, 4)
+    return False, np.round(dets, 4)
+
+
+def continuation_parameter(Xs, Ys, x_cur, y_cur, x_next):
+    if len(Ys) < 3:
+        Ys.append(y_cur)
+        Xs.append(x_cur)
+    else:
+        Ys[0], Ys[1], Ys[2] = Ys[1], Ys[2], y_cur
+        Xs[0], Xs[1], Xs[2] = Xs[1], Xs[2], x_cur
+    a0 = Ys[0]
+    if len(Ys) == 1: return a0
+    a1 = (Ys[1] - Ys[0])/(Xs[1]-Xs[0])
+    if len(Ys) == 2: return a0 + a1*(x_next-Xs[0])
+    yx1x2 = (Ys[2]-Ys[1])/(Xs[2]-Xs[1])
+    a2 = (yx1x2 - a1)/(Xs[2]-Xs[0])
+    y_next = a0 + a1*(x_next-Xs[0]) + a2*(x_next-Xs[0])*(x_next-Xs[1])
+    return y_next
+
+
+def init_output_files(output_file):
+    F_file = f"{output_file}_frechet_matrix"
+    y_file = f"{output_file}_y"
+    dy_file = f"{output_file}_dy"
+    p_file = f"{output_file}_parameter"
+    
+    with open(F_file, "w") as f: pass
+    with open(p_file, "w") as f: pass
+    with open(y_file, "w") as f: pass
+    with open(dy_file, "w") as f: pass
+    
+
+def save_bifurcation_path(F, p, ydy, output_file):
+    
+    F_file = f"{output_file}_frechet_matrix"
+    y_file = f"{output_file}_y"
+    dy_file = f"{output_file}_dy"
+    p_file = f"{output_file}_parameter"
+    
+    with open(F_file, "a") as f:
+        f.write(np.array_str(F)+'\n')
+    with open(p_file, "a") as f:
+        f.write(str(p)+'\n')
+    with open(y_file, "a") as f:
+        f.write(np.array_str(ydy[:,0])+'\n')
+    with open(dy_file, "a") as f:
+        f.write(np.array_str(ydy[:,1])+'\n')
+        
+
+def update_parameter(params, y_init, direction=-1):
+    if params['l_p'] == -1:
+        params['p'] += direction*params['p_step']
+    else:
+        y_init[params['l_p']] += direction*params['p_step']
+        
+    return params, y_init
+
+def construct_bifurcation_path(ts, y_init, system, bc, params, system_solver=shooting, ode_solver=runge_kutta, output_file=None, t0=None):
+    if output_file is None:
+        output_file = f"out{np.random.uniform(0,10000)}"
+    init_output_files(output_file)
+    ps = []
+    Fs = []
+    ydys = []
+    
+    Xs = []
+    Ys = []
+    
+    if 'l_p' not in params:
+        params['l_p'] = -1
+        
+    if 'min_newton_steps' not in params:
+        params['min_newton_steps'] = 3
+        
+    if 'max_newton_steps' not in params:
+        params['max_newton_steps'] = 8
+    
+    
+    while True:
+        # stopping condition should be modified for each problem
+        # all information is written into txt on each iteration, so programme can be manually interrupted
+        # if params['p'] < 10**(-4):
+        #     return ps, ydys, Fs
+
+        print(f"p = {params['p']}, step = {params['p_step']}")
+        
+        _, newton_steps, ydy, F = system_solver(ts, y_init, system, bc, params, ode_solver, t0=t0)
+        print(f"newton steps = {newton_steps}")
+
+        
+        if newton_steps > params['max_newton_steps']:
+            params, y_init = update_parameter(params, y_init, direction=-1)
+            
+            params['p_step'] /= 2
+            
+            if abs(params['p_step']) < params['min_p_step']:
+                y_diff = ydys[-1][len(ts)//2] - ydys[-2][len(ts)//2]
+                params['l_p'] = np.argmax(np.abs(y_diff))
+                params['p_step'] = y_diff[params['l_p']]
+                
+                for i in range(len(Ys)):
+                    Xs[i], Ys[i][params['l_p']] = Ys[i][params['l_p']], Xs[i]
+            
+            params, y_init = update_parameter(params, y_init, direction=1)
+            continue
+        
+        elif newton_steps < params['min_newton_steps']:
+            params['p_step'] = min(abs(params['p_step']*2), abs(params['max_p_step']))
+    
+        ps.append(params['p'])
+        Fs.append(F)
+        ydys.append(ydy)
+        
+        save_bifurcation_path(F, params['p'], ydy, output_file)
+        
+        if params['l_p'] == -1:
+            x_cur = params['p']
+            x_next = x_cur + params['p_step']
+            y_cur = ydy[len(ydy)//2].copy()
+            y_init = continuation_parameter(Xs, Ys, x_cur, y_cur, x_next)
+            params['p'] = x_next
+        
+        else:
+            y_cur = ydy[len(ydy)//2].copy()
+            x_cur = y_cur[params['l_p']]
+            x_next = x_cur + params['p_step']
+            y_cur[params['l_p']] = params['p']
+            y_init = continuation_parameter(Xs, Ys, x_cur, y_cur, x_next)
+            params['p'] = y_init[params['l_p']]
+            y_init[params['l_p']] = x_next
+
+
+
+def txt_2_npy(output_file):
+    F_file = f"{output_file}_frechet_matrix"
+    y_file = f"{output_file}_y"
+    dy_file = f"{output_file}_dy"
+    p_file = f"{output_file}_parameter"
+    
+    with open(y_file, 'r') as f:
+        file = f.read().replace('\n', '')
+        file = file.replace('[', '')
+        ys_str = file.split(']')[:-1]
+        ys = []
+
+        for y in ys_str:
+            y = np.array(y.split(' '))
+            y = y[y != ''].astype(float)
+            ys.append(y)
+    np.save(y_file, ys)
+        
+    with open(dy_file, 'r') as f:
+        file = f.read().replace('\n', '')
+        file = file.replace('[', '')
+        dys_str = file.split(']')[:-1]
+        dys = []
+
+        for dy in dys_str:
+            dy = np.array(dy.split(' '))
+            dy = dy[dy != ''].astype(float)
+            dys.append(dy)
+    np.save(dy_file, dys)
+        
+    with open(p_file, 'r') as f:
+        file = f.read().replace('\n', ' ')
+        ps = np.array(file.split(' ')[:-1]).astype(float)
+    np.save(p_file, ps)
+    
+    with open(F_file, 'r') as f:
+        file = f.read().replace('\n', '')
+        file = file.split("]]")[:-1]
+        file = [F.replace('[[', '') for F in file]
+        file = [F.replace('[', '') for F in file]
+        file = [F.replace(']', '') for F in file]
+
+        Fs = []
+        for F in file:
+            F = np.array(F.split(' '))
+            F = F[F != ''].astype(float)
+            n = round(np.sqrt(len(F)))
+            Fs.append(F.reshape(n,n))
+    np.save(F_file, Fs)
+    
